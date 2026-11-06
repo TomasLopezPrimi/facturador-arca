@@ -6,9 +6,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import facturador_core as core
-from facturador_detalle import items_del_comprobante, normalizar_items, total_items
-from test_facturador_core import CUIT_PRUEBA, ServicioAutorizado
+import facturador.servicios as core
+from facturador.detalle import items_del_comprobante, normalizar_items, total_items
+from facturador.validaciones import validar_formulario
+from tests.helpers import CUIT_PRUEBA, ServicioAutorizado
 
 
 class DetalleTests(unittest.TestCase):
@@ -62,23 +63,23 @@ class FechasYEmisionTests(unittest.TestCase):
         }
 
     def test_formulario_deriva_total_del_detalle_y_conserva_texto(self):
-        datos = core.validar_formulario(self.formulario, self.config)
+        datos = validar_formulario(self.formulario, self.config)
         self.assertEqual(datos["importe"], Decimal("250.00"))
         self.assertEqual(datos["items"][0]["descripcion"], self.formulario["items"][0]["descripcion"].strip())
         self.assertEqual(datos["vencimiento_pago"], "20200215")
 
     def test_pago_puede_ser_futuro(self):
         self.formulario["vencimiento_pago"] = f"01/01/{date.today().year + 1}"
-        self.assertIsNotNone(core.validar_formulario(self.formulario, self.config)["vencimiento_pago"])
+        self.assertIsNotNone(validar_formulario(self.formulario, self.config)["vencimiento_pago"])
 
     def test_rechaza_vencimientos_invalidos_o_anteriores_a_emision(self):
         for valor in ("31/02/2020", "", "31/12/2019"):
             with self.subTest(valor=valor), self.assertRaises(ValueError):
-                core.validar_formulario({**self.formulario, "vencimiento_pago": valor}, self.config)
+                validar_formulario({**self.formulario, "vencimiento_pago": valor}, self.config)
 
     def test_productos_ignoran_fechas_de_pago_de_servicios(self):
         formulario = {**self.formulario, "concepto": "Productos", "vencimiento_pago": "fecha vieja inválida"}
-        self.assertIsNone(core.validar_formulario(formulario, self.config)["vencimiento_pago"])
+        self.assertIsNone(validar_formulario(formulario, self.config)["vencimiento_pago"])
 
     def test_fecha_y_total_se_conservan_de_formulario_a_wsfe_y_json(self):
         servicio = ServicioAutorizado()

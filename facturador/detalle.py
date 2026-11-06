@@ -1,4 +1,4 @@
-"""Cálculo del detalle compartido por el formulario y el PDF."""
+"""Cálculo del detalle compartido por el formulario y el PDF, sin efectos externos."""
 
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 

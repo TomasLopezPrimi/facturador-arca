@@ -1,5 +1,7 @@
 # Facturación electrónica: requisitos y controles esenciales
 
+Instalación y estructura del código: [README.md](../README.md).
+
 Resumen de referencia para preparar la emisión por WSFE. La clase del comprobante será un parámetro del sistema; los requisitos concretos varían según la clase, la condición fiscal del emisor y del receptor, y la operación. Verificar la normativa vigente antes de habilitar producción.
 
 ## 1. Datos obligatorios del comprobante

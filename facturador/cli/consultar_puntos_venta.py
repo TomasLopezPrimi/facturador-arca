@@ -1,31 +1,12 @@
+"""Consulta de puntos de venta, exclusivamente en homologación."""
 
-import json
-from pathlib import Path
-from zeep import Client
-from facturador_core import cargar_cuit_emisor
+import argparse
 
-BASE = Path(__file__).resolve().parent
-
-# Exclusivamente homologación
-WSFE_WSDL = (
-    "https://wswhomo.afip.gov.ar/wsfev1/service.asmx?WSDL"
-)
+from facturador.arca.wsfe import autenticar, crear_cliente_wsfe
 
 def consultar_puntos_venta():
-    # Leer credenciales existentes
-    with open(BASE / "credenciales.json", encoding="utf-8") as f:
-        credenciales = json.load(f)
-
-    if credenciales.get("environment") != "homologacion":
-        raise ValueError("Credenciales de entorno incorrecto")
-
-    auth = {
-        "Token": credenciales["token"],
-        "Sign": credenciales["sign"],
-        "Cuit": int(cargar_cuit_emisor()),
-    }
-
-    client = Client(WSFE_WSDL)
+    auth = autenticar("testing")
+    client = crear_cliente_wsfe("testing")
 
     # Consultar puntos de venta
     respuesta = client.service.FEParamGetPtosVenta(Auth=auth)
@@ -49,5 +30,11 @@ def consultar_puntos_venta():
         print("No se encontraron puntos de venta")
 
 
-if __name__ == "__main__":
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Consulta de puntos de venta en homologación")
+    parser.parse_args(argv)
     consultar_puntos_venta()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,4 +1,5 @@
-﻿
+﻿"""Autenticación WSAA y almacenamiento de tickets por ambiente y servicio."""
+
 import base64
 import subprocess
 import tempfile
@@ -6,18 +7,14 @@ import time
 import json
 import os
 import shutil
-import argparse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from zeep import Client
 
-BASE = Path(__file__).resolve().parent
-CERT = BASE / "certificados" / "certificado.pem"
-KEY = BASE / "certificados" / "privada.key"
+from facturador.rutas import BASE, CERT, KEY, CREDENTIALS_FILE
 
-CREDENTIALS_FILE = BASE / "credenciales.json"
 ENVIRONMENTS = {
     "testing": {"name": "homologacion", "wsaa": "https://wsaahomo.afip.gov.ar/ws/services/LoginCms?WSDL"},
     "produccion": {"name": "produccion", "wsaa": "https://wsaa.afip.gov.ar/ws/services/LoginCms?WSDL"},
@@ -194,13 +191,3 @@ def obtener_credenciales_vigentes(service, environment=ENVIRONMENT):
     }
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Autenticación ARCA WSAA")
-    parser.add_argument("--ambiente", choices=ENVIRONMENTS, default=ENVIRONMENT)
-    args = parser.parse_args()
-    token, sign, vencimiento = obtener_credenciales(environment=args.ambiente)
-    guardar_credenciales(token, sign, vencimiento, environment=args.ambiente)
-    print("Autenticación exitosa")
-    print("Token recibido:", bool(token))
-    print("Sign recibido:", bool(sign))
-    print("Vencimiento:", vencimiento)

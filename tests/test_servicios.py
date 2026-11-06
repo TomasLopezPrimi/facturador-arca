@@ -6,26 +6,12 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from zeep.exceptions import Fault
 
-import facturador_core as core
+import facturador.servicios as core
+from facturador.validaciones import validar_formulario
+from tests.helpers import CUIT_PRUEBA, ServicioAutorizado, ServicioSinRespuesta
 
 
-# Identificador sintético con documento base cero, solo para servicios simulados.
-CUIT_PRUEBA = "20000000001"
-
-
-class ServicioSinRespuesta:
-    def FECAESolicitar(self, **_kwargs):
-        raise TimeoutError("Se perdió la respuesta")
-
-
-class ServicioAutorizado:
-    def FECAESolicitar(self, **kwargs):
-        self.solicitud = kwargs["FeCAEReq"]
-        detalle = SimpleNamespace(Resultado="A", CAE="12345678901234", CAEFchVto="20261026")
-        return SimpleNamespace(FeCabResp=SimpleNamespace(Resultado="A"), FeDetResp=SimpleNamespace(FECAEDetResponse=[detalle]))
-
-
-class FacturadorCoreTests(unittest.TestCase):
+class FacturacionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -70,13 +56,13 @@ class FacturadorCoreTests(unittest.TestCase):
             "condicion_iva_emisor": "Monotributo", "ingresos_brutos": "Exento",
             "inicio_actividades": "01/01/2020",
         }
-        datos = core.validar_formulario(formulario, config)
+        datos = validar_formulario(formulario, config)
         self.assertEqual((datos["tipo_doc"], datos["receptor"]), (99, "0"))
         config["cuit_emisor"] = "20-00000000-1"
-        self.assertEqual(core.validar_formulario(formulario, config)["cuit_emisor"], CUIT_PRUEBA)
+        self.assertEqual(validar_formulario(formulario, config)["cuit_emisor"], CUIT_PRUEBA)
         formulario["importe"] = "10000000"
         with self.assertRaisesRegex(ValueError, "debe identificarse"):
-            core.validar_formulario(formulario, config)
+            validar_formulario(formulario, config)
 
     def test_autorizacion_consumidor_final_guarda_cae_y_documento(self):
         datos = {**self.datos, "receptor": "0", "tipo_doc_receptor": 99, "condicion_iva_receptor": 5}
@@ -165,44 +151,6 @@ class FacturadorCoreTests(unittest.TestCase):
         with patch.object(core, "consultar_datos_padron", side_effect=[FileNotFoundError("certificado"), perfil]):
             resultado = core.consultar_padron_para_interfaz(CUIT_PRUEBA, "testing", CUIT_PRUEBA)
         self.assertIn("datos de prueba", resultado["fuente"])
-
-
-class ConfiguracionPrivadaTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.config_path = Path(self.temp.name) / "config_facturador.json"
-        parche = patch.object(core, "CONFIG_PATH", self.config_path)
-        parche.start()
-        self.addCleanup(parche.stop)
-
-    def test_sin_configuracion_no_hay_cuit_predeterminado(self):
-        with self.assertRaisesRegex(ValueError, "Configurá y guardá tu CUIT"):
-            core.cargar_cuit_emisor()
-
-    def test_cuit_se_lee_de_configuracion_local_y_se_normaliza(self):
-        core.guardar_json_atomico(self.config_path, {"cuit_emisor": "20-00000000-1"})
-        self.assertEqual(core.cargar_cuit_emisor(), CUIT_PRUEBA)
-
-    def test_configuracion_incompleta_o_cuit_invalido_se_rechaza(self):
-        for config in ({}, {"cuit_emisor": ""}, {"cuit_emisor": "20000000002"}):
-            with self.subTest(config=config):
-                core.guardar_json_atomico(self.config_path, config)
-                with self.assertRaises(ValueError):
-                    core.cargar_cuit_emisor()
-
-    def test_auth_usa_cuit_local_sin_consultar_arca(self):
-        core.guardar_json_atomico(self.config_path, {"cuit_emisor": CUIT_PRUEBA})
-        ticket = {"token": "token-simulado", "sign": "firma-simulada"}
-        with patch.object(core, "obtener_credenciales_vigentes", return_value=ticket):
-            auth = core.auth_wsfe("testing")
-        self.assertEqual(auth["Cuit"], int(CUIT_PRUEBA))
-
-    def test_auth_sin_cuit_no_solicita_credenciales(self):
-        with patch.object(core, "obtener_credenciales_vigentes") as obtener:
-            with self.assertRaises(ValueError):
-                core.auth_wsfe("testing")
-        obtener.assert_not_called()
 
 
 if __name__ == "__main__":

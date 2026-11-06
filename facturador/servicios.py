@@ -1,42 +1,21 @@
 """Emisión individual de comprobantes C por WSFEv1."""
 
 import json
-import os
-from datetime import date, datetime, timezone
-from decimal import Decimal, InvalidOperation
+from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 from zeep.exceptions import Fault
 
-from emitir_factura import (
-    BASE, TIPO_FACTURA, TIPO_NOTA_CREDITO, crear_cliente_wsfe,
-    comprobar_errores, generar_pdf,
-    consultar_datos_padron, ErrorConstanciaPadron,
-)
-from main import obtener_credenciales_vigentes, CREDENTIALS_FILE
-from facturador_detalle import items_del_comprobante, normalizar_items, total_items
-
-
-CONFIG_PATH = BASE / "config_facturador.json"
-RECEPTORES_PATH = BASE / "receptores.json"
-CONDICIONES_IVA = {
-    "Responsable inscripto": 1,
-    "Exento": 4,
-    "Consumidor final": 5,
-    "Monotributista": 6,
-}
-TIPO_SERVICIO = "620900 - SERVICIOS DE INFORMÁTICA N.C.P."
-CONDICIONES_VENTA = (
-    "Contado",
-    "Tarjeta de Débito",
-    "Tarjeta de Crédito",
-    "Cuenta Corriente",
-    "Cheque",
-    "Transferencia Bancaria",
-    "Otra",
-    "Otros medios de pago electrónico",
-)
-LIMITE_CONSUMIDOR_SIN_DOCUMENTO = Decimal("10000000")
+from facturador.almacenamiento import cargar_cuit_emisor, guardar_json_atomico
+from facturador.arca.padron import consultar_datos_padron, ErrorConstanciaPadron
+from facturador.arca.wsaa import obtener_credenciales_vigentes
+from facturador.arca.wsfe import auth_wsfe, crear_cliente_wsfe, comprobar_errores
+from facturador.constantes import CONDICIONES_IVA, TIPO_FACTURA, TIPO_NOTA_CREDITO
+from facturador.detalle import items_del_comprobante
+from facturador.documentos.pdf import generar_pdf
+from facturador.rutas import BASE, CREDENTIALS_FILE, carpeta_datos
+from facturador.validaciones import validar_cuit, validar_formulario
 
 
 def estado_servicios(ambiente):
@@ -99,216 +78,8 @@ def consultar_padron_para_interfaz(cuit, ambiente, cuit_emisor=None):
     return perfil
 
 
-def guardar_json_atomico(ruta, datos):
-    ruta.parent.mkdir(parents=True, exist_ok=True)
-    temporal = ruta.with_name(ruta.name + ".tmp")
-    with open(temporal, "w", encoding="utf-8") as archivo:
-        json.dump(datos, archivo, ensure_ascii=False, indent=2, default=str)
-        archivo.flush()
-        os.fsync(archivo.fileno())
-    os.replace(temporal, ruta)
-
-
-def cargar_config():
-    if not CONFIG_PATH.exists():
-        return {}
-    return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-
-
-def cargar_cuit_emisor():
-    config = cargar_config()
-    if not config.get("cuit_emisor"):
-        raise ValueError("Configurá y guardá tu CUIT emisor en Configuración antes de continuar.")
-    return validar_cuit(config["cuit_emisor"])
-
-
-def cargar_receptores():
-    if not RECEPTORES_PATH.exists():
-        return []
-    receptores = json.loads(RECEPTORES_PATH.read_text(encoding="utf-8"))
-    if not isinstance(receptores, list):
-        raise ValueError("El archivo de receptores guardados no tiene un formato válido.")
-    campos = ("id", "documento_tipo", "documento", "nombre", "domicilio", "iva")
-    identificadores = set()
-    for receptor in receptores:
-        if not isinstance(receptor, dict) or any(campo not in receptor for campo in campos):
-            raise ValueError("El archivo de receptores guardados no tiene un formato válido.")
-        receptor["id"] = str(receptor["id"]).strip()
-        if not receptor["id"] or receptor["id"] in identificadores:
-            raise ValueError("El archivo de receptores guardados contiene identificadores inválidos.")
-        identificadores.add(receptor["id"])
-        for campo in campos[1:]:
-            receptor[campo] = str(receptor[campo])
-    return receptores
-
-
-def guardar_receptores(receptores):
-    guardar_json_atomico(RECEPTORES_PATH, receptores)
-
-
-def validar_cuit(valor):
-    cuit = "".join(caracter for caracter in str(valor) if caracter.isdigit())
-    if len(cuit) != 11:
-        raise ValueError("El CUIT debe tener 11 dígitos.")
-    suma = sum(int(digito) * peso for digito, peso in zip(cuit[:10], (5, 4, 3, 2, 7, 6, 5, 4, 3, 2)))
-    verificador = 11 - suma % 11
-    if verificador == 11:
-        verificador = 0
-    elif verificador == 10:
-        verificador = 9
-    if verificador != int(cuit[-1]):
-        raise ValueError("El CUIT tiene un dígito verificador incorrecto.")
-    return cuit
-
-
-def importe_decimal(valor):
-    texto = str(valor).strip().replace(" ", "")
-    if "," in texto:
-        texto = texto.replace(".", "").replace(",", ".")
-    try:
-        importe = Decimal(texto)
-    except InvalidOperation as error:
-        raise ValueError("Ingresá un importe válido.") from error
-    if not importe.is_finite() or importe <= 0 or importe != importe.quantize(Decimal("0.01")):
-        raise ValueError("El importe debe ser positivo y tener hasta dos decimales.")
-    return importe
-
-
-def validar_formulario(formulario, config):
-    cuit_emisor = validar_cuit(config.get("cuit_emisor", ""))
-    ambiente = formulario["ambiente"]
-    if ambiente not in ("testing", "produccion"):
-        raise ValueError("Ambiente inválido.")
-    tipo = formulario["tipo"]
-    if tipo not in ("Factura C", "Nota de crédito C"):
-        raise ValueError("Tipo de comprobante inválido.")
-    condicion_venta = formulario.get("condicion_venta", "Transferencia Bancaria")
-    if condicion_venta not in CONDICIONES_VENTA:
-        raise ValueError("Seleccioná una condición de venta válida.")
-    documento_tipo = formulario["documento_tipo"]
-    documento = formulario["receptor"].strip()
-    if documento_tipo == "CUIT":
-        receptor = validar_cuit(documento)
-        tipo_doc = 80
-    elif documento_tipo == "DNI":
-        if not documento.isdigit() or not 7 <= len(documento) <= 8:
-            raise ValueError("Ingresá un DNI de 7 u 8 dígitos.")
-        receptor = documento
-        tipo_doc = 96
-    elif documento_tipo == "Sin documento":
-        receptor = "0"
-        tipo_doc = 99
-    else:
-        raise ValueError("Seleccioná el tipo de documento del receptor.")
-    nombre_receptor = formulario["nombre_receptor"].strip()
-    domicilio_receptor = formulario["domicilio_receptor"].strip()
-    if tipo_doc == 80 and (not nombre_receptor or not domicilio_receptor):
-        raise ValueError("Completá el nombre y domicilio del receptor.")
-    if tipo_doc != 80:
-        nombre_receptor = nombre_receptor or "A CONSUMIDOR FINAL"
-        domicilio_receptor = domicilio_receptor or "NR"
-    if "items" in formulario:
-        items = normalizar_items(formulario["items"])
-        importe = total_items(items)
-        descripcion = "\n".join(item["descripcion"] for item in items)
-    else:
-        importe = importe_decimal(formulario["importe"])
-        descripcion = formulario["descripcion"].strip()
-        unidad = "unidad" if formulario["concepto"] == "Productos" else "servicio"
-        items = normalizar_items([{
-            "descripcion": descripcion, "cantidad": "1", "unidad": unidad,
-            "precio_unitario": str(importe),
-        }])
-    if tipo_doc == 99 and importe >= LIMITE_CONSUMIDOR_SIN_DOCUMENTO:
-        raise ValueError("Desde $10.000.000, el consumidor final debe identificarse con DNI o CUIT.")
-    if formulario["iva"] not in CONDICIONES_IVA:
-        raise ValueError("Seleccioná la condición IVA del receptor.")
-    if tipo_doc != 80 and formulario["iva"] != "Consumidor final":
-        raise ValueError("Para DNI o sin documento, seleccioná IVA 'Consumidor final'.")
-    concepto = formulario["concepto"]
-    if concepto not in ("Productos", "Servicios"):
-        raise ValueError("Seleccioná Productos o Servicios.")
-    tipo_servicio = ""
-    if concepto == "Servicios":
-        tipo_servicio = formulario.get("tipo_servicio", TIPO_SERVICIO)
-        if tipo_servicio != TIPO_SERVICIO:
-            raise ValueError("Seleccioná el tipo de servicio 620900 - SERVICIOS DE INFORMÁTICA N.C.P.")
-    try:
-        fecha_comprobante = datetime.strptime(
-            formulario.get("fecha", date.today().strftime("%d/%m/%Y")), "%d/%m/%Y"
-        ).date()
-        fecha_desde = datetime.strptime(
-            formulario.get("servicio_desde", formulario.get("fecha", date.today().strftime("%d/%m/%Y"))), "%d/%m/%Y"
-        ).date()
-        fecha_hasta = datetime.strptime(
-            formulario.get("servicio_hasta", formulario.get("fecha", date.today().strftime("%d/%m/%Y"))), "%d/%m/%Y"
-        ).date()
-        vencimiento_pago = None
-        if concepto == "Servicios":
-            vencimiento_pago = datetime.strptime(
-                formulario.get("vencimiento_pago", fecha_comprobante.strftime("%d/%m/%Y")), "%d/%m/%Y"
-            ).date()
-    except ValueError as error:
-        raise ValueError("Ingresá fechas válidas con formato DD/MM/AAAA.") from error
-    if fecha_comprobante > date.today():
-        raise ValueError("La fecha del comprobante no puede ser futura.")
-    if concepto == "Servicios" and fecha_hasta < fecha_desde:
-        raise ValueError("La fecha hasta del servicio no puede ser anterior a la fecha desde.")
-    if vencimiento_pago and vencimiento_pago < fecha_comprobante:
-        raise ValueError("El vencimiento para el pago no puede ser anterior a la fecha del comprobante.")
-    try:
-        punto = int(config["punto_venta"])
-    except (KeyError, TypeError, ValueError) as error:
-        raise ValueError("Configurá el punto de venta de Web Services.") from error
-    if not 1 <= punto <= 99998:
-        raise ValueError("Punto de venta inválido.")
-    for campo in ("nombre_emisor", "domicilio_emisor", "condicion_iva_emisor", "ingresos_brutos", "inicio_actividades"):
-        if not str(config.get(campo, "")).strip():
-            raise ValueError(f"Completá {campo.replace('_', ' ')} en Configuración.")
-    try:
-        inicio = datetime.strptime(config["inicio_actividades"], "%d/%m/%Y").date()
-        if inicio > date.today():
-            raise ValueError
-    except ValueError as error:
-        raise ValueError("Inicio de actividades: elegí una fecha válida que no sea futura.") from error
-    if tipo == "Nota de crédito C":
-        try:
-            original_punto = int(formulario["original_punto"])
-            original_numero = int(formulario["original_numero"])
-        except ValueError as error:
-            raise ValueError("Indicá punto de venta y número de la factura original.") from error
-        if not (1 <= original_punto <= 99998 and 1 <= original_numero <= 99999999):
-            raise ValueError("La factura original tiene un número inválido.")
-    else:
-        original_punto = original_numero = None
-    return {
-        "ambiente": ambiente, "tipo": tipo, "receptor": receptor,
-        "nombre_receptor": nombre_receptor, "domicilio_receptor": domicilio_receptor,
-        "tipo_doc": tipo_doc, "documento_tipo": documento_tipo,
-        "importe": importe, "descripcion": descripcion, "items": items, "iva": formulario["iva"],
-        "concepto": concepto, "tipo_servicio": tipo_servicio,
-        "condicion_venta": condicion_venta,
-        "fecha": fecha_comprobante.strftime("%Y%m%d"),
-        "servicio_desde": fecha_desde.strftime("%Y%m%d"),
-        "servicio_hasta": fecha_hasta.strftime("%Y%m%d"),
-        "vencimiento_pago": vencimiento_pago.strftime("%Y%m%d") if vencimiento_pago else None,
-        "punto": punto, "cuit_emisor": cuit_emisor,
-        "original_punto": original_punto, "original_numero": original_numero,
-    }
-
-
-def carpeta_datos(ambiente):
-    return BASE / ("facturas_test" if ambiente == "testing" else "facturas_produccion")
-
-
 def ruta_pendiente(ambiente):
     return carpeta_datos(ambiente) / "solicitud_pendiente.json"
-
-
-def auth_wsfe(ambiente, cuit_emisor=None):
-    cuit_emisor = validar_cuit(cuit_emisor) if cuit_emisor else cargar_cuit_emisor()
-    credenciales = obtener_credenciales_vigentes("wsfe", ambiente)
-    return {"Token": credenciales["token"], "Sign": credenciales["sign"], "Cuit": int(cuit_emisor)}
 
 
 def consulta_autorizada(cliente, auth, tipo, punto, numero):

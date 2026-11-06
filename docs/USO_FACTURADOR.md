@@ -1,12 +1,12 @@
 # Facturador ARCA (uso personal)
 
-Iniciá **Facturador ARCA** con `python facturador_app.py` desde tu entorno virtual, o desde un acceso directo que hayas creado. Es una aplicación local con Tkinter para **Factura C** y **Nota de crédito C**. No tiene usuarios, servidor ni acceso compartido. Usa tu sesión de Windows. La instalación y configuración con credenciales propias se explican en [README.md](README.md).
+Iniciá **Facturador ARCA** con `python -m facturador` desde la raíz del proyecto y tu entorno virtual, o desde un acceso directo a `facturador_app.py`. Es una aplicación local con Tkinter para **Factura C** y **Nota de crédito C**. No tiene usuarios, servidor ni acceso compartido. Usa tu sesión de Windows. La instalación y configuración con credenciales propias se explican en [README.md](../README.md).
 
 ## Primer uso
 
 1. En **Configuración**, cargá el CUIT emisor y el punto de venta habilitado para **Web Services / WSFE**, nombre o razón social y domicilio comercial. Elegí la condición frente al IVA y el régimen de Ingresos Brutos en las listas. Si corresponde, ingresá el número de inscripción IIBB. Seleccioná el inicio de actividades en el calendario. Al cambiar de CUIT, revisá también todos estos datos del emisor antes de guardar.
    - Junto al domicilio del emisor, **Ver fiscal en ARCA** consulta el padrón del ambiente elegido. ARCA devuelve el domicilio fiscal; confirmá si coincide con el comercial antes de copiarlo. Después guardá la configuración.
-2. Guardá la configuración. Se crea `config_facturador.json` en esta carpeta.
+2. Guardá la configuración. Se crea `config_facturador.json` en la raíz del proyecto, no en `docs/` ni en el paquete `facturador/`.
 3. En **Emitir comprobante**, empezá por **testing**. Elegí CUIT, DNI o Sin documento y cargá los datos del receptor. En **Productos / servicios**, usá **Agregar renglón** para ingresar descripción, código opcional, cantidad, unidad de medida y precio unitario. Podés editar o quitar renglones; el importe total se calcula automáticamente. Si elegís consumidor final sin documento, el importe debe ser inferior a $10.000.000.
    - Las cantidades admiten hasta seis decimales y los precios hasta dos. Cada renglón se redondea a centavos y el total es la suma de esos importes.
    - Para servicios, indicá el período y el **Vencimiento para el pago**. Esta fecha puede ser futura, no puede ser anterior a la emisión y se utiliza tanto en WSFE como en el PDF. Es independiente del vencimiento del CAE que otorga ARCA.
@@ -43,15 +43,18 @@ Si se interrumpe la conexión al pedir CAE, la solicitud queda registrada en `so
 
 ## Archivos principales
 
-- `facturador_app.py`: interfaz Tkinter.
-- `facturador_core.py`: validación, consulta y solicitud de CAE.
-- `main.py`: autenticación WSAA.
-- `emitir_factura.py`: integración previa y generación de PDF/QR.
-- `facturador_pdf.py`: representación gráfica y paginación del PDF.
-- `facturador_detalle.py`: validación y cálculo de los renglones.
+- `facturador/ui/`: interfaz Tkinter y calendario.
+- `facturador/servicios.py`: preparación, solicitud de CAE y recuperación.
+- `facturador/validaciones.py` y `facturador/detalle.py`: validación y cálculo.
+- `facturador/almacenamiento.py`: configuración y libreta de receptores locales.
+- `facturador/rutas.py`: ubicación de los archivos privados y comprobantes.
+- `facturador/arca/`: clientes WSAA, WSFE y padrón.
+- `facturador/documentos/`: representación gráfica del PDF y payload del QR.
+- `facturador/cli/`: autenticación, consultas y emisión por consola.
+- `tests/`: pruebas con datos sintéticos y servicios simulados.
 
 ## Verificación local
 
-`python -m unittest -v` ejecuta las pruebas sin emitir comprobantes. Las pruebas de lectura del PDF requieren `pypdf` como dependencia de desarrollo; sin ella se omiten esas pruebas. La aplicación utiliza ReportLab para generar los PDF.
+Desde la raíz, `python -m unittest discover -s tests -t . -v` ejecuta las pruebas sin emitir comprobantes. También funciona `python -m unittest -v`. Las pruebas de lectura del PDF requieren `pypdf` como dependencia de desarrollo; sin ella se omiten esas pruebas. La aplicación utiliza ReportLab para generar los PDF.
 
 Documentación oficial: [solicitud de autorización](https://arca.gob.ar/fe/emision-autorizacion/solicitud-autorizacion.asp), [datos del comprobante](https://www.arca.gob.ar/fe/emision-autorizacion/datos-comprobantes.asp), [certificados digitales](https://www.arca.gob.ar/ws/programadores/certificados-digitales.asp), [manual WSFEv1](https://www.arca.gob.ar/fe/ayuda/documentos/wsfev1-RG-4291.pdf).

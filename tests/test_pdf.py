@@ -3,9 +3,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from facturador_detalle import normalizar_items, total_items
-from facturador_pdf import generar_pdf
-from test_facturador_core import CUIT_PRUEBA
+from facturador.detalle import normalizar_items, total_items
+from facturador.documentos import pdf as documento_pdf
+from facturador.documentos.pdf import generar_pdf
+from tests.helpers import comprobante_de_prueba
 
 try:
     from pypdf import PdfReader
@@ -18,18 +19,7 @@ class PdfTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.datos = {
-            "carpeta_salida": self.temp.name, "ambiente": "testing", "emisor": int(CUIT_PRUEBA),
-            "receptor": CUIT_PRUEBA, "tipo_doc_receptor": 80, "punto": 3, "numero": 1,
-            "tipo_comprobante": 11, "nombre_comprobante": "Factura C", "prefijo_archivo": "factura",
-            "fecha": "20261001", "vencimiento": "20261011", "vencimiento_pago": "20261115",
-            "concepto": "Servicios", "servicio_desde": "20260901", "servicio_hasta": "20260930",
-            "cae": "12345678901234", "condicion_iva_receptor_nombre": "Responsable inscripto",
-            "datos_emisor": {"nombre": "Emisor de prueba", "condicion_iva": "Monotributista",
-                             "domicilio_comercial": "Calle 1, Ciudad", "ingresos_brutos": "Exento", "inicio_actividades": "01/01/2020"},
-            "datos_receptor": {"nombre": "Receptor de prueba", "domicilio_comercial": "Calle 2, Ciudad"},
-            "descripcion": "Servicio de prueba", "importe": "100.00",
-        }
+        self.datos = comprobante_de_prueba(self.temp.name)
 
     def leer(self):
         ruta = generar_pdf(self.datos, "https://www.arca.gob.ar/fe/qr/?p=prueba")
@@ -87,11 +77,40 @@ class PdfTests(unittest.TestCase):
     def test_error_de_render_no_reemplaza_pdf_existente(self):
         ruta = Path(self.temp.name) / "factura_C_00003_00000001.pdf"
         ruta.write_bytes(b"PDF anterior")
-        with patch("facturador_pdf.BaseDocTemplate.build", side_effect=RuntimeError("fallo")):
+        with patch("facturador.documentos.pdf.BaseDocTemplate.build", side_effect=RuntimeError("fallo")):
             with self.assertRaises(RuntimeError):
                 self.leer()
         self.assertEqual(ruta.read_bytes(), b"PDF anterior")
         self.assertFalse(ruta.with_name(ruta.name + ".tmp").exists())
+
+
+class GeneracionPdfTests(unittest.TestCase):
+    """Verificaciones de escritura que no requieren el lector opcional pypdf."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.datos = comprobante_de_prueba(self.temp.name)
+
+    def test_genera_pdf_y_qr_por_defecto_en_carpeta_indicada(self):
+        with patch.object(documento_pdf, "generar_url_qr", wraps=documento_pdf.generar_url_qr) as generar_qr:
+            ruta = generar_pdf(self.datos)
+        generar_qr.assert_called_once_with(self.datos)
+        self.assertEqual(ruta.parent, Path(self.temp.name))
+        self.assertTrue(ruta.read_bytes().startswith(b"%PDF-"))
+        self.assertFalse(ruta.with_name(ruta.name + ".tmp").exists())
+
+    def test_sin_carpeta_explicita_usa_la_ruta_del_ambiente(self):
+        del self.datos["carpeta_salida"]
+        with patch.object(documento_pdf, "carpeta_datos", return_value=Path(self.temp.name)) as carpeta:
+            ruta = generar_pdf(self.datos)
+        carpeta.assert_called_once_with("testing")
+        self.assertEqual(ruta.parent, Path(self.temp.name))
+
+    def test_url_qr_explicita_no_se_recalcula(self):
+        with patch.object(documento_pdf, "generar_url_qr") as generar_qr:
+            generar_pdf(self.datos, "https://www.arca.gob.ar/fe/qr/?p=prueba")
+        generar_qr.assert_not_called()
 
 
 if __name__ == "__main__":

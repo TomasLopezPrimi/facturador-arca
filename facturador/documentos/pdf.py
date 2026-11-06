@@ -18,7 +18,9 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import BaseDocTemplate, Frame, KeepTogether, LongTable, PageTemplate, Paragraph, Spacer, Table, TableStyle
 
-from facturador_detalle import items_del_comprobante
+from facturador.detalle import items_del_comprobante
+from facturador.documentos.qr import generar_url_qr
+from facturador.rutas import carpeta_datos
 
 
 GRIS = colors.Color(0.25, 0.28, 0.31)
@@ -199,13 +201,13 @@ def dibujar_pie(pdf, documento, datos, url_qr):
     pdf.restoreState()
 
 
-def generar_pdf(datos, url_qr):
+def generar_pdf(datos, url_qr=None):
+    if url_qr is None:
+        url_qr = generar_url_qr(datos)
     items = items_del_comprobante(datos)
     pdfmetrics.registerFont(TTFont("ArialPDF", "C:/Windows/Fonts/arial.ttf"))
     pdfmetrics.registerFont(TTFont("ArialPDF-Bold", "C:/Windows/Fonts/arialbd.ttf"))
-    base = Path(__file__).resolve().parent
-    carpeta = Path(datos["carpeta_salida"]) if datos.get("carpeta_salida") else base / (
-        "facturas_test" if datos["ambiente"] == "testing" else "facturas_produccion")
+    carpeta = Path(datos["carpeta_salida"]) if datos.get("carpeta_salida") else carpeta_datos(datos["ambiente"])
     carpeta.mkdir(parents=True, exist_ok=True)
     nombre = f"{datos.get('prefijo_archivo', 'factura')}_C_{datos['punto']:05d}_{datos['numero']:08d}.pdf"
     ruta = carpeta / nombre
